@@ -158,7 +158,7 @@ jobs:
         name: package
         path: dist
     - name: Publish to PyPi
-      if: ${{ github.ref_type	== 'tag' }}
+      if: ${{ 0 && github.ref_type == 'tag' }}
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         print-hash: true
