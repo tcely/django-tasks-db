@@ -12,7 +12,7 @@ from types import FrameType
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
 from django.core.management.base import BaseCommand, CommandError
-from django.db import close_old_connections, models
+from django.db import close_old_connections, connections, models
 from django.db.utils import OperationalError
 from django.utils.autoreload import DJANGO_AUTORELOAD_ENV, run_with_reloader
 from django.utils.crypto import get_random_string
@@ -96,6 +96,7 @@ class Worker:
             signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 
     def _ping_responder(self) -> None:
+        close_old_connections()
         while self.running:
             try:
                 pings = DBTaskPing.objects.filter(
@@ -117,7 +118,10 @@ class Worker:
                 # tests expecting output may need to be adjusted first
                 # logger.debug(f"[ping-responder] {e!s}")
             finally:
+                close_old_connections()
                 time.sleep(self.interval)
+        close_old_connections()
+        connections.close_all()
 
     def run(self) -> None:
         logger.info(
@@ -135,7 +139,7 @@ class Worker:
         self._pong_thread = threading.Thread(
             target=self._ping_responder,
             name=f"{thread_name_prefix}-ping-responder-{','.join(sorted(queues))}",
-            daemon=True,
+            daemon=False,
         )
 
         if self.startup_delay and self.interval:
@@ -256,6 +260,7 @@ class Worker:
         # wait for the thread then clean up connections before exit
         self._pong_thread.join()
         close_old_connections()
+        connections.close_all()
 
     def run_task(self, db_task_result: DBTaskResult) -> None:
         """
