@@ -107,7 +107,9 @@ class Worker:
                 if self.excluded_queue_names:
                     pings = pings.exclude(queue_name__in=self.excluded_queue_names)
                 if self.running_task is not False:
-                    pings.filter(task_id=self.running_task).update(pongs=1 + models.F('pongs'))
+                    pings.filter(task_id=self.running_task).update(
+                        pongs=1 + models.F('pongs')
+                    )
 
             except BaseException as e:
                 logger.debug(f"[ping-responder] {e!s}")
@@ -186,11 +188,15 @@ class Worker:
                 return None
 
             # Query for "lost" tasks
-            running_tasks = DBTaskResult.objects.running().filter(backend_name=self.backend_name)
+            running_tasks = DBTaskResult.objects.running().filter(
+                backend_name=self.backend_name
+            )
             if not self.process_all_queues:
                 running_tasks = running_tasks.filter(queue_name__in=self.queue_names)
             if self.excluded_queue_names:
-                running_tasks = running_tasks.exclude(queue_name__in=self.excluded_queue_names)
+                running_tasks = running_tasks.exclude(
+                    queue_name__in=self.excluded_queue_names
+                )
             for t in running_tasks:
                 for wid in t.worker_ids:
                     # we were the only worker to attempt it
@@ -233,9 +239,9 @@ class Worker:
                     status=TaskResultStatus.READY,
                 )
                 DBTaskPing.objects.filter(
-                        task_id=tid,
-                        queue_name=qn,
-                        backend_name=ben,
+                    task_id=tid,
+                    queue_name=qn,
+                    backend_name=ben,
                 ).delete()
 
             # Emulate Django's request behaviour and check for expired
