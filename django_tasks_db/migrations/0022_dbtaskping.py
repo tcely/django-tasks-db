@@ -20,7 +20,8 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 (
-                    "worker_id", models.CharField(max_length=256, verbose_name="worker id"),
+                    "worker_id",
+                    models.CharField(max_length=256, verbose_name="worker id"),
                 ),
                 (
                     "queue_name",
