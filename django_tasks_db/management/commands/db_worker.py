@@ -192,7 +192,6 @@ class Worker:
                 return None
 
             # Query for tasks that are in limbo
-            # TODO: update tests to expect this query
             running_tasks = DBTaskResult.objects.running().filter(
                 backend_name=self.backend_name,
                 queue_name__in=queues,
@@ -253,6 +252,10 @@ class Worker:
             if self.running and not task_result:
                 # Wait before checking for another task
                 time.sleep(self.interval)
+
+        # wait for the thread then clean up connections before exit
+        self._pong_thread.join()
+        close_old_connections()
 
     def run_task(self, db_task_result: DBTaskResult) -> None:
         """
