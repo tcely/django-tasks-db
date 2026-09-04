@@ -111,7 +111,7 @@ class Worker:
                         pongs=1 + models.F("pongs")
                     )
 
-            # ruff: ignore[S110]
+            # ruff: ignore[F841,S110]
             except BaseException as e:
                 pass
                 # tests expecting output may need to be adjusted first
