@@ -4,6 +4,7 @@ import os
 import random
 import signal
 import sys
+import threading
 import time
 from argparse import ArgumentParser, ArgumentTypeError, BooleanOptionalAction
 from types import FrameType
@@ -11,7 +12,7 @@ from types import FrameType
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
 from django.core.management.base import BaseCommand, CommandError
-from django.db import close_old_connections
+from django.db import close_old_connections, models
 from django.db.utils import OperationalError
 from django.utils.autoreload import DJANGO_AUTORELOAD_ENV, run_with_reloader
 from django.utils.crypto import get_random_string
@@ -94,6 +95,25 @@ class Worker:
         if hasattr(signal, "SIGQUIT"):
             signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 
+    def _ping_responder(self) -> None:
+        while self.running:
+            try:
+                pings = DBTaskPing.objects.filter(
+                    worker_id=self.worker_id,
+                    backend_name=self.backend_name,
+                )
+                if not self.process_all_queues:
+                    pings = pings.filter(queue_name__in=self.queue_names)
+                if self.excluded_queue_names:
+                    pings = pings.exclude(queue_name__in=self.excluded_queue_names)
+                if self.running_task is not False:
+                    pings.filter(task_id=self.running_task).update(pongs=1 + F('pongs'))
+            except BaseException:
+                pass
+            finally:
+                time.sleep(self.interval)
+                continue
+
     def run(self) -> None:
         logger.info(
             "Starting worker worker_id=%s queues=%s",
@@ -101,10 +121,23 @@ class Worker:
             ",".join(self.queue_names),
         )
 
+        queues = set(self.queue_names)
+        if self.process_all_queues:
+            queues.extend(task_backends[self.backend_name].queues)
+            queues.difference_update(self.excluded_queue_names)
+            queues.discard("*")
+        thread_name_prefix = f"{self.backend_name}-tasks-db_worker-{self.worker_id}"
+        self._pong_thread = threading.Thread(
+            target=self._ping_responder,
+            name=f"{thread_name_prefix}-ping-responder-{",".join(sorted(queues))}",
+            daemon=True,
+        )
+
         if self.startup_delay and self.interval:
             # Add a random small delay before starting to avoid a thundering herd
             time.sleep(random.random())  # noqa: S311
 
+        self._pong_thread.start()
         while self.running:
             # Check for dropped/expired connections right after waking up
             close_old_connections()
@@ -220,7 +253,7 @@ class Worker:
         Run the given task, marking it as successful or failed.
         """
         try:
-            self.running_task = True
+            self.running_task = db_task_result.id
             task = db_task_result.task
             task_result = db_task_result.task_result
 
