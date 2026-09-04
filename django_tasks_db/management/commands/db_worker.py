@@ -125,7 +125,7 @@ class Worker:
 
         queues = set(self.queue_names)
         if self.process_all_queues:
-            queues.extend(task_backends[self.backend_name].queues)
+            queues.update(task_backends[self.backend_name].queues)
             queues.difference_update(self.excluded_queue_names)
             queues.discard("*")
         thread_name_prefix = f"{self.backend_name}-tasks-db_worker-{self.worker_id}"
