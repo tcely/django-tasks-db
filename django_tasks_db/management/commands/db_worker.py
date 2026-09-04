@@ -108,7 +108,7 @@ class Worker:
                     pings = pings.exclude(queue_name__in=self.excluded_queue_names)
                 if self.running_task is not False:
                     pings.filter(task_id=self.running_task).update(
-                        pongs=1 + models.F('pongs')
+                        pongs=1 + models.F("pongs")
                     )
 
             except BaseException as e:
