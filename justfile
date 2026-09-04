@@ -4,7 +4,9 @@
 
 test *ARGS:
     python -m manage check
-    python -m manage makemigrations --dry-run --check --noinput -v 2
+    python -m manage makemigrations --dry-run --help
+    python -m manage makemigrations --dry-run --noinput -v 2
+    python -m manage makemigrations --dry-run --check --noinput
     python -m coverage run --source=django_tasks_db -m manage test --shuffle --noinput {{ ARGS }}
     python -m coverage report
     python -m coverage html
