@@ -23,11 +23,12 @@ from django_tasks_db.compat import (
     TASKS_LOGGER,
     InvalidTaskBackend,
     TaskContext,
+    TaskResultStatus,
     task_backends,
     task_finished,
     task_started,
 )
-from django_tasks_db.models import DBTaskResult
+from django_tasks_db.models import DBTaskPing, DBTaskResult
 from django_tasks_db.utils import exclusive_transaction, is_locked_database_exception
 
 logger = logging.getLogger("django_tasks_db")
@@ -58,6 +59,7 @@ class Worker:
         self.running = True
         self.running_task = False
         self._run_tasks = 0
+        self._lost_tasks = {}
 
         self.worker_id = worker_id
 
@@ -149,6 +151,59 @@ class Worker:
                     self.worker_id,
                 )
                 return None
+
+            # Query for "lost" tasks
+            running_tasks = DBTaskResult.objects.running().filter(backend_name=self.backend_name)
+            if not self.process_all_queues:
+                running_tasks = running_tasks.filter(queue_name__in=self.queue_names)
+            if self.excluded_queue_names:
+                running_tasks = running_tasks.exclude(queue_name__in=self.excluded_queue_names)
+            for t in running_tasks:
+                for wid in t.worker_ids:
+                    # we were the only worker to attempt it
+                    if 1 == len(t.worker_ids) and wid == self.worker_id:
+                        DBTaskResult.objects.filter(
+                            id=t.id,
+                            queue_name=t.queue_name,
+                            backend_name=t.backend_name,
+                            status=TaskResultStatus.RUNNING,
+                        ).update(
+                            status=TaskResultStatus.READY,
+                        )
+                        continue
+                    ping, created = DBTaskPing.objects.get_or_create(
+                        task_id=t.id,
+                        worker_id=wid,
+                        queue_name=t.queue_name,
+                        backend_name=t.backend_name,
+                    )
+                    k = tuple(wid, str(t.id), t.queue_name, t.backend_name)
+                    if created:
+                        v = [0]
+                    else:
+                        v = self._lost_tasks.get(k, [])
+                        v.append(ping.pongs)
+                    self._lost_tasks[k] = v
+            for k, v in self._lost_tasks.items():
+                # skip over candidates with too few samples
+                if 5 >= len(v):
+                    continue
+                if v[0] != v[-1]:
+                    v.clear()
+                wid, tid, qn, ben = k
+                DBTaskResult.objects.filter(
+                    id=tid,
+                    queue_name=qn,
+                    backend_name=ben,
+                    status=TaskResultStatus.RUNNING,
+                ).update(
+                    status=TaskResultStatus.READY,
+                )
+                DBTaskPing.objects.filter(
+                        task_id=tid,
+                        queue_name=qn,
+                        backend_name=ben,
+                ).delete()
 
             # Emulate Django's request behaviour and check for expired
             # database connections periodically.
