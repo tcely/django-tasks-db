@@ -108,11 +108,11 @@ class Worker:
                     pings = pings.exclude(queue_name__in=self.excluded_queue_names)
                 if self.running_task is not False:
                     pings.filter(task_id=self.running_task).update(pongs=1 + models.F('pongs'))
-            except BaseException:
-                pass
+
+            except BaseException as e:
+                logger.debug(f"[ping-responder] {e!s}")
             finally:
                 time.sleep(self.interval)
-                continue
 
     def run(self) -> None:
         logger.info(
@@ -129,7 +129,7 @@ class Worker:
         thread_name_prefix = f"{self.backend_name}-tasks-db_worker-{self.worker_id}"
         self._pong_thread = threading.Thread(
             target=self._ping_responder,
-            name=f"{thread_name_prefix}-ping-responder-{",".join(sorted(queues))}",
+            name=f"{thread_name_prefix}-ping-responder-{','.join(sorted(queues))}",
             daemon=True,
         )
 
