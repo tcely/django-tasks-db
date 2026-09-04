@@ -58,7 +58,7 @@ class Worker:
         self.max_tasks = max_tasks
 
         self.running = True
-        self.running_task: str | False = False
+        self.running_task: str | None = None
         self._run_tasks = 0
         self._lost_tasks: dict[tuple[str, ...], list[int]] = {}
 
@@ -78,7 +78,7 @@ class Worker:
         )
         self.running = False
 
-        if self.running_task is False:
+        if self.running_task is None:
             # If we're not currently running a task, exit immediately.
             # This is useful if we're currently in a `sleep`.
             sys.exit(0)
@@ -106,7 +106,7 @@ class Worker:
                     pings = pings.filter(queue_name__in=self.queue_names)
                 if self.excluded_queue_names:
                     pings = pings.exclude(queue_name__in=self.excluded_queue_names)
-                if self.running_task is not False:
+                if self.running_task is not None:
                     pings.filter(task_id=self.running_task).update(
                         pongs=1 + models.F("pongs")
                     )
@@ -216,7 +216,7 @@ class Worker:
                         queue_name=t.queue_name,
                         backend_name=t.backend_name,
                     )
-                    k = (wid, str(t.id), t.queue_name, t.backend_name)
+                    k = tuple(map(str, (wid, t.id, t.queue_name, t.backend_name)))
                     if created:
                         v = [0]
                     else:
@@ -295,7 +295,7 @@ class Worker:
                     task_result=task_result,
                 )
         finally:
-            self.running_task = False
+            self.running_task = None
             self._run_tasks += 1
 
 
