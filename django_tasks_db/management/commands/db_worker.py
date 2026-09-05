@@ -142,7 +142,6 @@ class Worker:
                 # Skip over candidate tasks with too few samples
                 continue
             wid, tid, qn, ben = k
-            keys_to_remove.add(k)
             rl = tasks_responses.get(tid, [])
             # Record: claimed, task_id, queue_name
             rl.append((v[0] != v[-1], tid, qn))
@@ -150,31 +149,34 @@ class Worker:
         for task_id, responses in tasks_responses.items():
             # queue_status: dict[str, tuple[int, int]] = {
             #     qn: qs := (
-            #         a := ((1 if active else 0) + qs.get(qn, (0, 0))[0]),
-            #         t := (1 + qs.get(qn, (0, 0))[1]),
+            #         a_int := ((1 if active else 0) + qs.get(qn, (0, 0))[0]),
+            #         t_int := (1 + qs.get(qn, (0, 0))[1]),
             #     ) for active, tid, qn in responses if tid == task_id
             # }
             queue_status: dict[str, tuple[int, int]] = {}
             for active, tid, qn in responses:
                 if tid != task_id:
                     continue
-                a, t = queue_status.get(qn, (0, 0))
-                t += 1
+                a_int, t_int = queue_status.get(qn, (0, 0))
+                t_int += 1
                 if active:
-                    a += 1
-                queue_status[qn] = (a, t)
+                    a_int += 1
+                queue_status[qn] = (a_int, t_int)
             for qn, counts in queue_status.items():
-                active, total = counts
-                task_result = running_tasks.get(id=task_id, queue_name=qn)
-                if total != len(task_result.worker_ids):
+                a_int, t_int = counts
+                t = running_tasks.get(id=task_id, queue_name=qn)
+                if t_int != len(set(t.worker_ids)):
                     # Not all workers were evaluated
                     continue
                 # Reset pings
                 DBTaskPing.objects.filter(
-                    task_id=task_result.id,
-                    queue_name=task_result.queue_name,
-                    backend_name=task_result.backend_name,
+                    task_id=t.id,
+                    queue_name=t.queue_name,
+                    backend_name=t.backend_name,
                 ).delete()
+                for wid in t.worker_ids:
+                    k = tuple(map(str, (wid, t.id, t.queue_name, t.backend_name)))
+                    keys_to_remove.add(k)
                 if 0 == active:
                     # No workers claimed this task as active
                     DBTaskResult.objects.filter(
