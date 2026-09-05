@@ -140,8 +140,8 @@ class Worker:
     def _track_task_pings(self, task: DBTaskResult) -> None:
         worker_ids = set(map(str, task.worker_ids))
         if self._is_this_worker_limbo_task(task):
-            return 
-                
+            return
+
         for worker_id in worker_ids:
             ping, created = DBTaskPing.objects.get_or_create(
                 task_id=task.id,
