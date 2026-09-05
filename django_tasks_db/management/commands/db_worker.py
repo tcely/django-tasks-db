@@ -105,7 +105,7 @@ class Worker:
         )
         for t in running_tasks:
             for wid in t.worker_ids:
-                # we were the only worker to attempt it
+                # We were the only worker to attempt it
                 if 1 == len(t.worker_ids) and wid == self.worker_id:
                     DBTaskResult.objects.filter(
                         id=t.id,
@@ -129,13 +129,17 @@ class Worker:
                     v = self._lost_tasks.get(k, [])
                     v.append(ping.pongs)
                 self._lost_tasks[k] = v
+
+        # check the candidates for replies
+        keys_to_remove: set[tuple[str, ...]] = set()
         for k, v in self._lost_tasks.items():
-            # skip over candidates with too few samples
-            if min_samples >= len(v):
+            if min_samples > len(v):
+                # skip over candidates with too few samples
                 continue
             wid, tid, qn, ben = k
-            # no workers claimed this task as active
+            keys_to_remove.add(k)
             if v[0] == v[-1]:
+                # no workers claimed this task as active
                 DBTaskResult.objects.filter(
                     id=tid,
                     queue_name=qn,
@@ -144,13 +148,15 @@ class Worker:
                 ).update(
                     status=TaskResultStatus.READY,
                 )
-            else:
-                v.clear()
             DBTaskPing.objects.filter(
                 task_id=tid,
                 queue_name=qn,
                 backend_name=ben,
             ).delete()
+
+        # clean up old lists of samples
+        for k in keys_to_remove:
+            self._lost_tasks.poo(k, None)
 
     def _next_task_result(self) -> tuple[DBTaskResult | None, bool]:
         tasks = DBTaskResult.objects.ready().filter(backend_name=self.backend_name)
