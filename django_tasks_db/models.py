@@ -311,7 +311,11 @@ class DBTaskPing(models.Model):
     class Meta:
         verbose_name = _("DB Worker Ping")
         verbose_name_plural = _("DB Worker Pings")
-        unique_together = (("worker_id", "task_id", "queue_name", "backend_name"),)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["worker_id", "task_id", "queue_name", "backend_name"],
+            )
+        ]
         indexes = [
             models.Index(fields=["task_id", "queue_name", "backend_name"]),
             models.Index(fields=["worker_id", "queue_name", "backend_name"]),
