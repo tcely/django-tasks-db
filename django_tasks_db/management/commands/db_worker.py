@@ -147,21 +147,15 @@ class Worker:
             rl.append((v[0] != v[-1], tid, qn))
             tasks_responses[tid] = rl
         for task_id, responses in tasks_responses.items():
-            # queue_status: dict[str, tuple[int, int]] = {
-            #     qn: qs := (
-            #         a_int := ((1 if active else 0) + qs.get(qn, (0, 0))[0]),
-            #         t_int := (1 + qs.get(qn, (0, 0))[1]),
-            #     ) for active, tid, qn in responses if tid == task_id
-            # }
             queue_status: dict[str, tuple[int, int]] = {}
             for active, tid, qn in responses:
                 if tid != task_id:
                     continue
                 a_int, t_int = queue_status.get(qn, (0, 0))
-                t_int += 1
-                if active:
-                    a_int += 1
-                queue_status[qn] = (a_int, t_int)
+                queue_status[qn] = (
+                    (1 if active else 0) + a_int,
+                    1 + t_int,
+                )
             for qn, counts in queue_status.items():
                 a_int, t_int = counts
                 t = running_tasks.get(id=task_id, queue_name=qn)
@@ -180,9 +174,9 @@ class Worker:
                 if 0 == active:
                     # No workers claimed this task as active
                     DBTaskResult.objects.filter(
-                        id=task_result.id,
-                        queue_name=task_result.queue_name,
-                        backend_name=task_result.backend_name,
+                        id=t.id,
+                        queue_name=t.queue_name,
+                        backend_name=t.backend_name,
                         status=TaskResultStatus.RUNNING,
                     ).update(
                         status=TaskResultStatus.READY,
