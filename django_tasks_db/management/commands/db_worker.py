@@ -111,11 +111,9 @@ class Worker:
                     and wid == self.worker_id
                     and str(t.id) != self.running_task
                 ):
-                    DBTaskResult.objects.filter(
+                    running_tasks.filter(
                         id=t.id,
                         queue_name=t.queue_name,
-                        backend_name=t.backend_name,
-                        status=TaskResultStatus.RUNNING,
                     ).update(
                         status=TaskResultStatus.READY,
                     )
@@ -158,7 +156,9 @@ class Worker:
                 )
             for qn, counts in queue_status.items():
                 a_int, t_int = counts
-                t = running_tasks.get(id=task_id, queue_name=qn)
+                t = tuple(
+                    t for t in running_tasks if task_id == str(t.id) and qn == str(t.queue_name)
+                )[0]
                 if t_int != len(set(t.worker_ids)):
                     # Not all workers were evaluated
                     continue
@@ -171,13 +171,11 @@ class Worker:
                 for wid in t.worker_ids:
                     k = tuple(map(str, (wid, t.id, t.queue_name, t.backend_name)))
                     keys_to_remove.add(k)
-                if 0 == active:
+                if 0 == a_int:
                     # No workers claimed this task as active
-                    DBTaskResult.objects.filter(
+                    running_tasks.filter(
                         id=t.id,
                         queue_name=t.queue_name,
-                        backend_name=t.backend_name,
-                        status=TaskResultStatus.RUNNING,
                     ).update(
                         status=TaskResultStatus.READY,
                     )
