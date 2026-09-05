@@ -118,8 +118,7 @@ class Worker:
         connections.close_all()
 
     def _task_key(self, task: DBTaskResult) -> TaskKey:
-        k = (task.id, task.queue_name)
-        return tuple(map(str, k))
+        return tuple(map(str, (task.id, task.queue_name)))
 
     def _lost_task_key(
         self,
