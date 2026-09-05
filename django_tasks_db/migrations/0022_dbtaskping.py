@@ -40,10 +40,12 @@ class Migration(migrations.Migration):
                 "verbose_name_plural": "DB Worker Pings",
                 "indexes": [
                     models.Index(
-                        fields=["task_id", "queue_name", "backend_name"], name="django_task_task_id_8a8162_idx"
+                        fields=["task_id", "queue_name", "backend_name"],
+                        name="django_task_task_id_8a8162_idx",
                     ),
                     models.Index(
-                        fields=["worker_id", "queue_name", "backend_name"], name="django_task_worker__3a4ddb_idx"
+                        fields=["worker_id", "queue_name", "backend_name"],
+                        name="django_task_worker__3a4ddb_idx",
                     ),
                 ],
                 "unique_together": {
