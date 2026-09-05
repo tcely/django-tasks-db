@@ -262,7 +262,7 @@ class Worker:
                     )
                     return None
 
-                self._limbo_tasks(queues)
+                self._limbo_tasks(queues=queues)
 
                 # Emulate Django's request behaviour and check for expired
                 # database connections periodically.
