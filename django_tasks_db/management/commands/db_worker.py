@@ -285,10 +285,12 @@ class Worker:
 
     def _ping_responder(self, /, queues: set[str]) -> None:
         local = threading.local()
+        # ruff: ignore[S311]
         local.interval = random.triangular(low=0.25, high=2.0, mode=2)
         close_old_connections()
         try:
             while not self._stopping.wait(local.interval):
+                # ruff: ignore[S311]
                 local.interval = random.triangular(low=0.25, high=2.0, mode=2)
                 try:
                     pings = DBTaskPing.objects.filter(
