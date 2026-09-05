@@ -7,7 +7,9 @@ import sys
 import threading
 import time
 from argparse import ArgumentParser, ArgumentTypeError, BooleanOptionalAction
+from dataclasses import dataclass
 from types import FrameType
+from typing import TypeAlias
 
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
@@ -33,6 +35,24 @@ from django_tasks_db.models import DBTaskPing, DBTaskResult
 from django_tasks_db.utils import exclusive_transaction, is_locked_database_exception
 
 logger = logging.getLogger("django_tasks_db")
+
+TaskKey: TypeAlias = tuple[str, str]
+LostTaskKey: TypeAlias = tuple[str, str, str]
+
+
+@dataclass(slots=True)
+class _LostTaskSamples:
+    count: int
+    first: int
+    last: int
+
+    @property
+    def claimed(self) -> bool:
+        return self.first != self.last
+
+    def add(self, pongs: int) -> None:
+        self.count += 1
+        self.last = pongs
 
 
 class Worker:
@@ -60,7 +80,7 @@ class Worker:
         self.running = True
         self.running_task: str | None = None
         self._run_tasks = 0
-        self._lost_tasks: dict[tuple[str, ...], list[int]] = {}
+        self._lost_tasks: dict[LostTaskKey, _LostTaskSamples] = {}
         self._stopping = threading.Event()
 
         self.worker_id = worker_id
@@ -97,98 +117,152 @@ class Worker:
         close_old_connections()
         connections.close_all()
 
-    def _limbo_tasks(self, /, queues: set[str], *, min_samples: int = 5) -> None:
-        # Query for tasks that are in limbo
-        running_tasks = DBTaskResult.objects.running().filter(
-            backend_name=self.backend_name,
-            queue_name__in=queues,
+    def _task_key(self, task: DBTaskResult) -> TaskKey:
+        k = (task.id, task.queue_name)
+        return tuple(map(str, k))
+
+    def _lost_task_key(
+        self,
+        worker_id: str,
+        task: DBTaskResult,
+    ) -> LostTaskKey:
+        return (worker_id,) + self._task_key(task)
+
+    def _is_this_worker_limbo_task(self, task: DBTaskResult) -> bool:
+        task_id = str(task.id)
+        worker_ids = set(map(str, task.worker_ids))
+        return (
+            1 == len(worker_ids)
+            and tuple(worker_ids)[0] == self.worker_id
+            and task_id != self.running_task
         )
-        for t in running_tasks:
-            for wid in t.worker_ids:
-                # We were the only worker to attempt it
-                if (
-                    1 == len(t.worker_ids)
-                    and wid == self.worker_id
-                    and str(t.id) != self.running_task
-                ):
-                    running_tasks.filter(
-                        id=t.id,
-                        queue_name=t.queue_name,
-                    ).update(
-                        status=TaskResultStatus.READY,
-                    )
-                    continue
-                ping, created = DBTaskPing.objects.get_or_create(
-                    task_id=t.id,
-                    worker_id=wid,
-                    queue_name=t.queue_name,
-                    backend_name=t.backend_name,
-                )
-                k = tuple(map(str, (wid, t.id, t.queue_name, t.backend_name)))
-                if created:
-                    v = [0]
-                else:
-                    v = self._lost_tasks.get(k, [])
-                    v.append(ping.pongs)
-                self._lost_tasks[k] = v
 
-        # Check the candidate tasks for replies to the pings
-        keys_to_remove: set[tuple[str, ...]] = set()
-        tasks_responses: dict[str, list[tuple[bool, str, str]]] = {}
-        for k, v in self._lost_tasks.items():
-            if min_samples > len(v):
-                # Skip over candidate tasks with too few samples
+    def _track_task_pings(self, task: DBTaskResult) -> None:
+        worker_ids = set(map(str, task.worker_ids))
+        if self._is_this_worker_limbo_task(task):
+            return 
+                
+        for worker_id in worker_ids:
+            ping, created = DBTaskPing.objects.get_or_create(
+                task_id=task.id,
+                worker_id=worker_id,
+                queue_name=task.queue_name,
+                backend_name=self.backend_name,
+            )
+
+            key = self._lost_task_key(worker_id, task)
+
+            if created:
+                self._lost_tasks[key] = _LostTaskSamples(
+                    count=1,
+                    first=0,
+                    last=0,
+                )
                 continue
-            wid, tid, qn, ben = k
-            rl = tasks_responses.get(tid, [])
-            # Record: claimed, task_id, queue_name
-            rl.append((v[0] != v[-1], tid, qn))
-            tasks_responses[tid] = rl
-        for task_id, responses in tasks_responses.items():
-            queue_status: dict[str, tuple[int, int]] = {}
-            for active, tid, qn in responses:
-                if tid != task_id:
-                    continue
-                a_int, t_int = queue_status.get(qn, (0, 0))
-                queue_status[qn] = (
-                    (1 if active else 0) + a_int,
-                    1 + t_int,
-                )
-            for qn, counts in queue_status.items():
-                a_int, t_int = counts
-                try:
-                    t = next(
-                        t
-                        for t in running_tasks
-                        if task_id == str(t.id) and qn == str(t.queue_name)
-                    )
-                except StopIteration:
-                    continue
-                else:
-                    if t_int != len(set(t.worker_ids)):
-                        # Not all workers were evaluated
-                        continue
-                # Reset pings
-                DBTaskPing.objects.filter(
-                    task_id=t.id,
-                    queue_name=t.queue_name,
-                    backend_name=t.backend_name,
-                ).delete()
-                for wid in t.worker_ids:
-                    k = tuple(map(str, (wid, t.id, t.queue_name, t.backend_name)))
-                    keys_to_remove.add(k)
-                if 0 == a_int:
-                    # No workers claimed this task as active
-                    running_tasks.filter(
-                        id=t.id,
-                        queue_name=t.queue_name,
-                    ).update(
-                        status=TaskResultStatus.READY,
-                    )
 
-        # Clean up old lists of samples
-        for k in keys_to_remove:
-            self._lost_tasks.pop(k, None)
+            samples = self._lost_tasks.get(key)
+            if samples is None:
+                # The ping existed before this worker started tracking it.
+                self._lost_tasks[key] = _LostTaskSamples(
+                    count=1,
+                    first=ping.pongs,
+                    last=ping.pongs,
+                )
+            else:
+                samples.add(ping.pongs)
+
+    def _clear_task_tracking(self, task: DBTaskResult) -> None:
+        DBTaskPing.objects.filter(
+            task_id=task.id,
+            queue_name=task.queue_name,
+            backend_name=self.backend_name,
+        ).delete()
+
+        task_id = str(task.id)
+        queue_name = str(task.queue_name)
+
+        for key in tuple(self._lost_tasks):
+            worker_id, tracked_task_id, tracked_queue_name = key
+
+            if (
+                tracked_task_id == task_id
+                and tracked_queue_name == queue_name
+            ):
+                self._lost_tasks.pop(key, None)
+
+    def _clean_missing_tasks(self, running_task_keys: set[TaskKey]) -> None:
+        missing_task_keys = {
+            (task_id, queue_name)
+            for _, task_id, queue_name in self._lost_tasks
+            if (task_id, queue_name) not in running_task_keys
+        }
+
+        for task_id, queue_name in missing_task_keys:
+            DBTaskPing.objects.filter(
+                task_id=task_id,
+                queue_name=queue_name,
+                backend_name=self.backend_name,
+            ).delete()
+
+            for key in tuple(self._lost_tasks):
+                if (task_id, queue_name) == key[1:]:
+                    self._lost_tasks.pop(key, None)
+
+    def _mark_task_ready(self, task: DBTaskResult) -> None:
+        DBTaskResult.objects.running().filter(
+            id=task.id,
+            queue_name=task.queue_name,
+            backend_name=task.backend_name,
+        ).update(
+            status=TaskResultStatus.READY,
+        )
+
+    def _limbo_tasks(self, /, queues: set[str], *, min_samples: int = 5) -> None:
+        running_tasks = list(
+            DBTaskResult.objects.running().filter(
+                backend_name=self.backend_name,
+                queue_name__in=queues,
+            )
+        )
+        running_task_keys = {
+            self._task_key(task)
+            for task in running_tasks
+        }
+
+        for task in running_tasks:
+            self._track_task_pings(task)
+
+        self._clean_missing_tasks(running_task_keys)
+
+        for task in running_tasks:
+            worker_ids = set(map(str, task.worker_ids))
+            if not worker_ids:
+                continue
+
+            if self._is_this_worker_limbo_task(task):
+                self._clear_task_tracking(task)
+                self._mark_task_ready(task)
+                continue
+
+            samples = [
+                self._lost_tasks[self._lost_task_key(worker_id, task)]
+                for worker_id in worker_ids
+                if self._lost_task_key(worker_id, task) in self._lost_tasks
+            ]
+
+            if len(samples) != len(worker_ids):
+                # A worker assignment is missing from the tracking state.
+                continue
+
+            if any(sample.count <= min_samples for sample in samples):
+                continue
+
+            task_claimed = any(sample.claimed for sample in samples)
+
+            self._clear_task_tracking(task)
+
+            if not task_claimed:
+                self._mark_task_ready(task)
 
     def _next_task_result(self) -> tuple[DBTaskResult | None, bool]:
         tasks = DBTaskResult.objects.ready().filter(backend_name=self.backend_name)
