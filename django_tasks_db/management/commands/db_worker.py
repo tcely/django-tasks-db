@@ -156,14 +156,15 @@ class Worker:
                 )
             for qn, counts in queue_status.items():
                 a_int, t_int = counts
-                if t := next(
+                t = next(
                     (
                         t
                         for t in running_tasks
                         if task_id == str(t.id) and qn == str(t.queue_name)
                     ),
                     None,
-                ) is None or t_int != len(set(t.worker_ids)):
+                )
+                if t is None or t_int != len(set(t.worker_ids)):
                     # Not all workers were evaluated
                     continue
                 # Reset pings
