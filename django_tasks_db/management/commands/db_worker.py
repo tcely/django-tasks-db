@@ -158,11 +158,9 @@ class Worker:
                 a_int, t_int = counts
                 try:
                     t = next(
-                        (
-                            t
-                            for t in running_tasks
-                            if task_id == str(t.id) and qn == str(t.queue_name)
-                        )
+                        t
+                        for t in running_tasks
+                        if task_id == str(t.id) and qn == str(t.queue_name)
                     )
                 except StopIteration:
                     continue
