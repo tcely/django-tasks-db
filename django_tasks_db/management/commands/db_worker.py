@@ -156,17 +156,20 @@ class Worker:
                 )
             for qn, counts in queue_status.items():
                 a_int, t_int = counts
-                t = next(
-                    (
-                        t
-                        for t in running_tasks
-                        if task_id == str(t.id) and qn == str(t.queue_name)
-                    ),
-                    None,
-                )
-                if t is None or t_int != len(set(t.worker_ids)):
-                    # Not all workers were evaluated
+                try:
+                    t = next(
+                        (
+                            t
+                            for t in running_tasks
+                            if task_id == str(t.id) and qn == str(t.queue_name)
+                        )
+                    )
+                except StopIteration:
                     continue
+                else:
+                    if t_int != len(set(t.worker_ids)):
+                        # Not all workers were evaluated
+                        continue
                 # Reset pings
                 DBTaskPing.objects.filter(
                     task_id=t.id,
