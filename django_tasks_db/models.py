@@ -314,6 +314,7 @@ class DBTaskPing(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["worker_id", "task_id", "queue_name", "backend_name"],
+                name="unique_worker_task_ping",
             )
         ]
         indexes = [
