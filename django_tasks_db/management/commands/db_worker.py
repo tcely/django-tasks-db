@@ -148,18 +148,17 @@ class Worker:
             rl.append((v[0] != v[-1], tid, qn))
             tasks_responses[tid] = rl
         for task_id, responses in tasks_responses.items():
-            queue_status: dict[str, tuple[int, int]] = {}
             # queue_status: dict[str, tuple[int, int]] = {
             #     qn: qs := (
             #         a := ((1 if active else 0) + qs.get(qn, (0, 0))[0]),
             #         t := (1 + qs.get(qn, (0, 0))[1]),
             #     ) for active, tid, qn in responses if tid == task_id
             # }
+            queue_status: dict[str, tuple[int, int]] = {}
             for active, tid, qn in responses:
                 if tid != task_id:
                     continue
-                qs_counts: tuple[int, int] = queue_status.get(qn, (0, 0))
-                a, t = qs_counts
+                a, t = queue_status.get(qn, (0, 0))
                 t += 1
                 if active:
                     a += 1
