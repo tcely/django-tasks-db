@@ -158,7 +158,7 @@ class Worker:
             for active, tid, qn in responses:
                 if tid != task_id:
                     continue
-                qs_counts = queue_status.get(qn, (0, 0))
+                qs_counts: tuple[int, int] = queue_status.get(qn, (0, 0))
                 a, t = qs_counts
                 t += 1
                 if active:
