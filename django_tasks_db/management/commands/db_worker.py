@@ -97,7 +97,7 @@ class Worker:
         close_old_connections()
         connections.close_all()
 
-    def _limbo_tasks(self, /, queues: set[str], *, min_samples=5) -> None:
+    def _limbo_tasks(self, /, queues: set[str], *, min_samples: int = 5) -> None:
         # Query for tasks that are in limbo
         running_tasks = DBTaskResult.objects.running().filter(
             backend_name=self.backend_name,
@@ -152,7 +152,7 @@ class Worker:
                 backend_name=ben,
             ).delete()
 
-    def _next_task_result(self) -> None:
+    def _next_task_result(self) -> tuple[DBTaskResult | None, bool]:
         tasks = DBTaskResult.objects.ready().filter(backend_name=self.backend_name)
         # TODO: use self._resolve_queues() instead
         if not self.process_all_queues:
