@@ -106,7 +106,7 @@ class Worker:
         for t in running_tasks:
             for wid in t.worker_ids:
                 # We were the only worker to attempt it
-                if 1 == len(t.worker_ids) and wid == self.worker_id:
+                if 1 == len(t.worker_ids) and wid == self.worker_id and str(t.id) != self.running_task:
                     DBTaskResult.objects.filter(
                         id=t.id,
                         queue_name=t.queue_name,
