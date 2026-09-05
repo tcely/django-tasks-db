@@ -38,6 +38,12 @@ class Migration(migrations.Migration):
             options={
                 "verbose_name": "DB Worker Ping",
                 "verbose_name_plural": "DB Worker Pings",
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=["worker_id", "task_id", "queue_name", "backend_name"],
+                        name="unique_worker_task_ping",
+                    )
+                ],
                 "indexes": [
                     models.Index(
                         fields=["task_id", "queue_name", "backend_name"],
@@ -48,9 +54,6 @@ class Migration(migrations.Migration):
                         name="django_task_worker__3a4ddb_idx",
                     ),
                 ],
-                "unique_together": {
-                    ("worker_id", "task_id", "queue_name", "backend_name")
-                },
             },
         ),
     ]
