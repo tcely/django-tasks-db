@@ -149,12 +149,12 @@ class Worker:
             tasks_responses[tid] = rl
         for task_id, responses in tasks_responses.items():
             queue_status: dict[str, tuple[int, int]] = {}
-            #queue_status: dict[str, tuple[int, int]] = {
-            #    qn: qs := (
-            #        a := ((1 if active else 0) + qs.get(qn, (0, 0))[0]),
-            #        t := (1 + qs.get(qn, (0, 0))[1]),
-            #    ) for active, tid, qn in responses if tid == task_id
-            #}
+            # queue_status: dict[str, tuple[int, int]] = {
+            #     qn: qs := (
+            #         a := ((1 if active else 0) + qs.get(qn, (0, 0))[0]),
+            #         t := (1 + qs.get(qn, (0, 0))[1]),
+            #     ) for active, tid, qn in responses if tid == task_id
+            # }
             for active, tid, qn in responses:
                 if tid != task_id:
                     continue
