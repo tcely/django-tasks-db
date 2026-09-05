@@ -226,6 +226,7 @@ class Worker:
         self._pong_thread = threading.Thread(
             target=self._ping_responder,
             name=f"{thread_name_prefix}-ping-responder-{','.join(sorted(queues))}",
+            # ruff: ignore[C408]
             kwargs=dict(queues=queues),
             daemon=False,
         )
