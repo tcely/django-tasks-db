@@ -106,7 +106,11 @@ class Worker:
         for t in running_tasks:
             for wid in t.worker_ids:
                 # We were the only worker to attempt it
-                if 1 == len(t.worker_ids) and wid == self.worker_id and str(t.id) != self.running_task:
+                if (
+                    1 == len(t.worker_ids)
+                    and wid == self.worker_id
+                    and str(t.id) != self.running_task
+                ):
                     DBTaskResult.objects.filter(
                         id=t.id,
                         queue_name=t.queue_name,
@@ -130,33 +134,62 @@ class Worker:
                     v.append(ping.pongs)
                 self._lost_tasks[k] = v
 
-        # check the candidates for replies
+        # Check the candidate tasks for replies to the pings
         keys_to_remove: set[tuple[str, ...]] = set()
+        tasks_responses: dict[str, list[tuple[bool, str, str]]] = {}
         for k, v in self._lost_tasks.items():
             if min_samples > len(v):
-                # skip over candidates with too few samples
+                # Skip over candidate tasks with too few samples
                 continue
             wid, tid, qn, ben = k
             keys_to_remove.add(k)
-            if v[0] == v[-1]:
-                # no workers claimed this task as active
-                DBTaskResult.objects.filter(
-                    id=tid,
-                    queue_name=qn,
-                    backend_name=ben,
-                    status=TaskResultStatus.RUNNING,
-                ).update(
-                    status=TaskResultStatus.READY,
-                )
-            DBTaskPing.objects.filter(
-                task_id=tid,
-                queue_name=qn,
-                backend_name=ben,
-            ).delete()
+            rl = tasks_responses.get(tid, [])
+            # Record: claimed, task_id, queue_name
+            rl.append((v[0] != v[-1], tid, qn))
+            tasks_responses[tid] = rl
+        for task_id, responses in tasks_responses.items():
+            queue_status: dict[str, tuple[int, int]] = {}
+            #queue_status: dict[str, tuple[int, int]] = {
+            #    qn: qs := (
+            #        a := ((1 if active else 0) + qs.get(qn, (0, 0))[0]),
+            #        t := (1 + qs.get(qn, (0, 0))[1]),
+            #    ) for active, tid, qn in responses if tid == task_id
+            #}
+            for active, tid, qn in responses:
+                if tid != task_id:
+                    continue
+                qs_counts = queue_status.get(qn, (0, 0))
+                a, t = qs_counts
+                t += 1
+                if active:
+                    a += 1
+                queue_status[qn] = (a, t)
+            for qn, counts in queue_status.items():
+                active, total = counts
+                task_result = running_tasks.get(id=task_id, queue_name=qn)
+                if total != len(task_result.worker_ids):
+                    # Not all workers were evaluated
+                    continue
+                # Reset pings
+                DBTaskPing.objects.filter(
+                    task_id=task_result.id,
+                    queue_name=task_result.queue_name,
+                    backend_name=task_result.backend_name,
+                ).delete()
+                if 0 == active:
+                    # No workers claimed this task as active
+                    DBTaskResult.objects.filter(
+                        id=task_result.id,
+                        queue_name=task_result.queue_name,
+                        backend_name=task_result.backend_name,
+                        status=TaskResultStatus.RUNNING,
+                    ).update(
+                        status=TaskResultStatus.READY,
+                    )
 
-        # clean up old lists of samples
+        # Clean up old lists of samples
         for k in keys_to_remove:
-            self._lost_tasks.poo(k, None)
+            self._lost_tasks.pop(k, None)
 
     def _next_task_result(self) -> tuple[DBTaskResult | None, bool]:
         tasks = DBTaskResult.objects.ready().filter(backend_name=self.backend_name)
