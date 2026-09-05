@@ -144,9 +144,9 @@ class Worker:
         for worker_id in worker_ids:
             ping, created = DBTaskPing.objects.get_or_create(
                 task_id=task.id,
-                worker_id=worker_id,
                 queue_name=task.queue_name,
                 backend_name=self.backend_name,
+                worker_id=worker_id,
             )
 
             key = self._lost_task_key(worker_id, task)
@@ -213,7 +213,7 @@ class Worker:
             status=TaskResultStatus.READY,
         )
 
-    def _limbo_tasks(self, /, queues: set[str], *, min_samples: int = 5) -> None:
+    def _limbo_tasks(self, /, queues: set[str], *, min_samples: int = 6) -> None:
         running_tasks = list(
             DBTaskResult.objects.running().filter(
                 backend_name=self.backend_name,
@@ -221,9 +221,6 @@ class Worker:
             )
         )
         running_task_keys = {self._task_key(task) for task in running_tasks}
-
-        for task in running_tasks:
-            self._track_task_pings(task)
 
         self._clean_missing_tasks(running_task_keys)
 
@@ -237,6 +234,7 @@ class Worker:
                 self._mark_task_ready(task)
                 continue
 
+            self._track_task_pings(task)
             samples = [
                 self._lost_tasks[self._lost_task_key(worker_id, task)]
                 for worker_id in worker_ids
@@ -286,14 +284,17 @@ class Worker:
         return task_result, retrieved_task_result
 
     def _ping_responder(self, /, queues: set[str]) -> None:
+        local = threading.local()
+        local.interval = random.triangular(low=0.25, high=2.0, mode=2)
         close_old_connections()
         try:
-            while not self._stopping.wait(self.interval):
+            while not self._stopping.wait(local.interval):
+                local.interval = random.triangular(low=0.25, high=2.0, mode=2)
                 try:
                     pings = DBTaskPing.objects.filter(
                         worker_id=self.worker_id,
-                        backend_name=self.backend_name,
                         queue_name__in=queues,
+                        backend_name=self.backend_name,
                     )
                     if self.running_task is not None:
                         pings.filter(task_id=self.running_task).update(
