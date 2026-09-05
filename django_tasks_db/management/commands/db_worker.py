@@ -184,10 +184,7 @@ class Worker:
         for key in tuple(self._lost_tasks):
             worker_id, tracked_task_id, tracked_queue_name = key
 
-            if (
-                tracked_task_id == task_id
-                and tracked_queue_name == queue_name
-            ):
+            if tracked_task_id == task_id and tracked_queue_name == queue_name:
                 self._lost_tasks.pop(key, None)
 
     def _clean_missing_tasks(self, running_task_keys: set[TaskKey]) -> None:
@@ -224,10 +221,7 @@ class Worker:
                 queue_name__in=queues,
             )
         )
-        running_task_keys = {
-            self._task_key(task)
-            for task in running_tasks
-        }
+        running_task_keys = {self._task_key(task) for task in running_tasks}
 
         for task in running_tasks:
             self._track_task_pings(task)
