@@ -225,7 +225,7 @@ class Worker:
         )
 
     def _limbo_tasks(self, /, queues: set[str], *, min_samples: int = 6) -> None:
-        running_tasks = list(
+        running_tasks = tuple(
             DBTaskResult.objects.running().filter(
                 backend_name=self.backend_name,
                 queue_name__in=queues,
@@ -246,17 +246,17 @@ class Worker:
                 continue
 
             self._track_task_pings(task)
-            samples = [
+            samples = tuple(
                 self._lost_tasks[self._lost_task_key(worker_id, task)]
                 for worker_id in worker_ids
                 if self._lost_task_key(worker_id, task) in self._lost_tasks
-            ]
+            )
 
             if len(samples) != len(worker_ids):
                 # A worker assignment is missing from the tracking state.
                 continue
 
-            if any(sample.count <= min_samples for sample in samples):
+            if any(min_samples > sample.count for sample in samples):
                 continue
 
             task_claimed = any(sample.claimed for sample in samples)
