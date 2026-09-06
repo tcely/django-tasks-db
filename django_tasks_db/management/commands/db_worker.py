@@ -142,33 +142,32 @@ class Worker:
             return
 
         for worker_id in worker_ids:
+            key = self._lost_task_key(worker_id, task)
+            samples = self._lost_tasks.get(key)
+
+            if samples is not None:
+                ping = DBTaskPing.objects.only("pongs").filter(
+                    worker_id=worker_id,
+                    queue_name=task.queue_name,
+                    backend_name=self.backend_name,
+                    task_id=task.id,
+                ).first()
+                if ping:
+                    samples.add(ping.pongs)
+                    continue
+                
             ping, created = DBTaskPing.objects.get_or_create(
-                task_id=task.id,
+                worker_id=worker_id,
                 queue_name=task.queue_name,
                 backend_name=self.backend_name,
-                worker_id=worker_id,
+                task_id=task.id,
             )
 
-            key = self._lost_task_key(worker_id, task)
-
-            if created:
-                self._lost_tasks[key] = _LostTaskSamples(
-                    count=1,
-                    first=0,
-                    last=0,
-                )
-                continue
-
-            samples = self._lost_tasks.get(key)
-            if samples is None:
-                # The ping existed before this worker started tracking it.
-                self._lost_tasks[key] = _LostTaskSamples(
-                    count=1,
-                    first=ping.pongs,
-                    last=ping.pongs,
-                )
-            else:
-                samples.add(ping.pongs)
+            self._lost_tasks[key] = _LostTaskSamples(
+                count=1,
+                first=0 if created else ping.pongs,
+                last=0 if created else ping.pongs,
+            )
 
     def _clear_task_tracking(self, task: DBTaskResult) -> None:
         DBTaskPing.objects.filter(
