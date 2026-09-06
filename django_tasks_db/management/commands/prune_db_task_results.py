@@ -105,9 +105,7 @@ class Command(BaseCommand):
         failed_min_age = (
             min_age
             if failed_min_age_days is None
-            else (
-                now_dt - timedelta(days=failed_min_age_days)
-            )
+            else (now_dt - timedelta(days=failed_min_age_days))
         )
 
         results = DBTaskResult.objects.finished().filter(backend_name=backend.alias)
