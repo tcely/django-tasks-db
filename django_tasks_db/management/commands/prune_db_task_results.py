@@ -23,7 +23,8 @@ def valid_backend_name(val: str) -> DatabaseBackend:
     try:
         backend = task_backends[val]
     except InvalidTaskBackend as e:
-        raise ArgumentTypeError(e.args[0]) from e
+        msg = str(e).replace(" connection '", " backend '", 1)
+        raise ArgumentTypeError(msg) from e
     if not isinstance(backend, DatabaseBackend):
         raise ArgumentTypeError(f"Backend '{val}' is not a database backend")
     return backend
@@ -42,7 +43,6 @@ class Command(BaseCommand):
     def add_arguments(self, parser: ArgumentParser) -> None:
         parser.add_argument(
             "--backend",
-            nargs="?",
             default=DEFAULT_TASK_BACKEND_ALIAS,
             type=valid_backend_name,
             dest="backend",
@@ -50,22 +50,18 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--queue-name",
-            nargs="?",
             default=DEFAULT_TASK_QUEUE_NAME,
             type=str,
             help="The queues to process. Separate multiple with a comma. To process all queues, use '*' (default: %(default)r)",
         )
         parser.add_argument(
             "--min-age-days",
-            nargs="?",
             default=14,
             type=valid_positive_int,
             help="The minimum age (in days) of a finished task result to be pruned (default: %(default)r)",
         )
         parser.add_argument(
             "--failed-min-age-days",
-            nargs="?",
-            default=None,
             type=valid_positive_int,
             help="The minimum age (in days) of a failed task result to be pruned (default: min-age-days)",
         )
@@ -101,21 +97,31 @@ class Command(BaseCommand):
     ) -> None:
         self.configure_logging(verbosity)
 
-        min_age = timezone.now() - timedelta(days=min_age_days)
+        # set-up all the ages from the same version of now
+        now_dt = timezone.now()
+        min_age = now_dt - timedelta(days=min_age_days)
         failed_min_age = (
-            (timezone.now() - timedelta(days=failed_min_age_days))
-            if failed_min_age_days is not None
-            else None
+            min_age
+            if failed_min_age_days is None
+            else (
+                now_dt - timedelta(days=failed_min_age_days)
+            )
         )
 
         results = DBTaskResult.objects.finished().filter(backend_name=backend.alias)
 
-        queue_names = queue_name.split(",")
-        if "*" not in queue_names:
+        # set-up queue names without "*" included
+        queue_names = set(queue_name.split(","))
+        all_queues = "*" in queue_names
+        queue_names.discard("*")
+        if not all_queues:
             results = results.filter(queue_name__in=queue_names)
 
-        if failed_min_age is None:
-            results = results.filter(finished_at__lte=min_age)
+        if failed_min_age_days is None:
+            statuses = set(
+                (TaskResultStatus.SUCCESSFUL, status=TaskResultStatus.FAILED),
+            )
+            results = results.filter(status__in=statuses, finished_at__lte=min_age)
         else:
             results = results.filter(
                 Q(status=TaskResultStatus.SUCCESSFUL, finished_at__lte=min_age)
