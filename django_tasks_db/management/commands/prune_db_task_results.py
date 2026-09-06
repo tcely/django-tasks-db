@@ -119,7 +119,7 @@ class Command(BaseCommand):
 
         if failed_min_age_days is None:
             statuses = set(
-                (TaskResultStatus.SUCCESSFUL, status=TaskResultStatus.FAILED),
+                (TaskResultStatus.SUCCESSFUL, TaskResultStatus.FAILED),
             )
             results = results.filter(status__in=statuses, finished_at__lte=min_age)
         else:
