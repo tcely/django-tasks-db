@@ -936,8 +936,24 @@ class DatabaseBackendWorkerTestCase(TransactionTestCase):
     def test_verbose_logging(self) -> None:
         result = test_tasks.noop_task.enqueue()
 
+        self.assertEqual(DBTaskResult.objects.all().count(), 1)
+        self.assertEqual(DBTaskResult.objects.ready().count(), 1)
+        self.assertEqual(DBTaskResult.objects.successful().count(), 0)
+        self.assertEqual(DBTaskResult.objects.failed().count(), 0)
+
+        # let the database settle
+        time.sleep(1)
+
         stdout = StringIO()
         self.run_worker(verbosity=3, stdout=stdout, stderr=stdout)
+
+        self.assertEqual(DBTaskResult.objects.all().count(), 1)
+        self.assertEqual(DBTaskResult.objects.ready().count(), 0)
+        self.assertEqual(DBTaskResult.objects.successful().count(), 1)
+        self.assertEqual(DBTaskResult.objects.failed().count(), 0)
+
+        # let the logging settle
+        time.sleep(1)
 
         self.assertEqual(
             stdout.getvalue().splitlines(),
