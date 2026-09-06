@@ -193,20 +193,24 @@ class Worker:
                 missing_task_keys.add(key[1:])
                 self._lost_tasks.pop(key, None)
 
-        chunk = {missing_task_keys.pop() for _ in range(min(100, len(missing_task_keys)))}
+        chunk = {
+            missing_task_keys.pop() for _ in range(min(100, len(missing_task_keys)))
+        }
         while chunk:
             task_ids_by_queue_name: dict[str, set[str]] = {}
             for task_id, queue_name in chunk:
-                ids = task_ids_by_queue_name.get(queue_name, set())
-                ids.add(task_id)
-                task_ids_by_queue_name[queue_name] = ids
-            for queue_name, ids in task_ids_by_queue_name.items():
+                task_ids = task_ids_by_queue_name.get(queue_name, set())
+                task_ids.add(task_id)
+                task_ids_by_queue_name[queue_name] = task_ids
+            for queue_name, task_ids in task_ids_by_queue_name.items():
                 DBTaskPing.objects.filter(
-                    task_id__in=ids,
+                    task_id__in=task_ids,
                     queue_name=queue_name,
                     backend_name=self.backend_name,
                 ).delete()
-            chunk = {missing_task_keys.pop() for _ in range(min(100, len(missing_task_keys)))}
+            chunk = {
+                missing_task_keys.pop() for _ in range(min(100, len(missing_task_keys)))
+            }
 
     def _mark_task_ready(self, task: DBTaskResult) -> None:
         DBTaskResult.objects.running().filter(
