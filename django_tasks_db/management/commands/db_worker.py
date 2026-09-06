@@ -155,7 +155,7 @@ class Worker:
                 if ping:
                     samples.add(ping.pongs)
                     continue
-                
+
             ping, created = DBTaskPing.objects.get_or_create(
                 worker_id=worker_id,
                 queue_name=task.queue_name,
