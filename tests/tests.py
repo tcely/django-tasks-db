@@ -936,8 +936,24 @@ class DatabaseBackendWorkerTestCase(TransactionTestCase):
     def test_verbose_logging(self) -> None:
         result = test_tasks.noop_task.enqueue()
 
+        self.assertEqual(DBTaskResult.objects.all().count(), 1)
+        self.assertEqual(DBTaskResult.objects.ready().count(), 1)
+        self.assertEqual(DBTaskResult.objects.successful().count(), 0)
+        self.assertEqual(DBTaskResult.objects.failed().count(), 0)
+
+        # let the database settle
+        time.sleep(1)
+
         stdout = StringIO()
         self.run_worker(verbosity=3, stdout=stdout, stderr=stdout)
+
+        self.assertEqual(DBTaskResult.objects.all().count(), 1)
+        self.assertEqual(DBTaskResult.objects.ready().count(), 0)
+        self.assertEqual(DBTaskResult.objects.successful().count(), 1)
+        self.assertEqual(DBTaskResult.objects.failed().count(), 0)
+
+        # let the logging settle
+        time.sleep(1)
 
         self.assertEqual(
             stdout.getvalue().splitlines(),
@@ -1619,15 +1635,19 @@ class DatabaseWorkerProcessTestCase(TransactionTestCase):
 
     @skipIf(sys.platform == "win32", "Cannot emulate CTRL-C on Windows")
     def test_interrupt_signals(self) -> None:
+        task_execution_time = 2
+        wait_timeout = 3
+
         for sig in [
             signal.SIGINT,  # ctrl-c
             signal.SIGTERM,
         ]:
             with self.subTest(sig):
-                result = test_tasks.sleep_for.enqueue(2)
+                result = test_tasks.sleep_for.enqueue(task_execution_time)
                 self.assertEqual(DBTaskResult.objects.get(id=result.id).worker_ids, [])
 
                 self.assertGreater(result.args[0], self.WORKER_STARTUP_TIME)
+                self.assertGreater(wait_timeout, task_execution_time)
 
                 process = self.start_worker()
 
@@ -1642,7 +1662,7 @@ class DatabaseWorkerProcessTestCase(TransactionTestCase):
 
                 process.send_signal(sig)
 
-                process.wait(timeout=2)
+                process.wait(timeout=wait_timeout)
 
                 self.assertEqual(process.returncode, 0)
 
