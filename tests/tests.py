@@ -1520,7 +1520,7 @@ class DatabaseBackendPruneTaskResultsTestCase(TransactionTestCase):
                 execute_from_command_line(
                     ["django-admin", "prune_db_task_results", "--backend", "unknown"]
                 )
-        self.assertIn("The connection 'unknown' doesn't exist.", output.getvalue())
+        self.assertIn("The backend 'unknown' doesn't exist.", output.getvalue())
 
     def test_incorrect_backend(self) -> None:
         output = StringIO()
