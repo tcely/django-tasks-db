@@ -146,12 +146,16 @@ class Worker:
             samples = self._lost_tasks.get(key)
 
             if samples is not None:
-                ping = DBTaskPing.objects.only("pongs").filter(
-                    worker_id=worker_id,
-                    queue_name=task.queue_name,
-                    backend_name=self.backend_name,
-                    task_id=task.id,
-                ).first()
+                ping = (
+                    DBTaskPing.objects.only("pongs")
+                    .filter(
+                        worker_id=worker_id,
+                        queue_name=task.queue_name,
+                        backend_name=self.backend_name,
+                        task_id=task.id,
+                    )
+                    .first()
+                )
                 if ping:
                     samples.add(ping.pongs)
                     continue
