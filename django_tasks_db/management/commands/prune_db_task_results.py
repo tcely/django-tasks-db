@@ -23,9 +23,7 @@ def valid_backend_name(val: str) -> DatabaseBackend:
     try:
         backend = task_backends[val]
     except InvalidTaskBackend as e:
-        # TODO: update tests for the changed output
-        # msg = str(e).replace(" connection '", " backend '", 1)
-        msg = str(e)
+        msg = str(e).replace(" connection '", " backend '", 1)
         raise ArgumentTypeError(msg) from e
     if not isinstance(backend, DatabaseBackend):
         raise ArgumentTypeError(f"Backend '{val}' is not a database backend")
