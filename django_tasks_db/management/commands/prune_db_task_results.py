@@ -23,7 +23,9 @@ def valid_backend_name(val: str) -> DatabaseBackend:
     try:
         backend = task_backends[val]
     except InvalidTaskBackend as e:
-        msg = str(e).replace(" connection '", " backend '", 1)
+        # TODO: update tests for the changed output
+        # msg = str(e).replace(" connection '", " backend '", 1)
+        msg = str(e)
         raise ArgumentTypeError(msg) from e
     if not isinstance(backend, DatabaseBackend):
         raise ArgumentTypeError(f"Backend '{val}' is not a database backend")
@@ -118,10 +120,10 @@ class Command(BaseCommand):
             results = results.filter(queue_name__in=queue_names)
 
         if failed_min_age_days is None:
-            statuses = set(
-                (TaskResultStatus.SUCCESSFUL, TaskResultStatus.FAILED),
+            results = results.filter(
+                status__in={TaskResultStatus.SUCCESSFUL, TaskResultStatus.FAILED},
+                finished_at__lte=min_age,
             )
-            results = results.filter(status__in=statuses, finished_at__lte=min_age)
         else:
             results = results.filter(
                 Q(status=TaskResultStatus.SUCCESSFUL, finished_at__lte=min_age)
