@@ -320,11 +320,8 @@ class Worker:
                             pongs=1 + models.F("pongs")
                         )
 
-                # ruff: ignore[F841,S110]
                 except BaseException as e:
-                    pass
-                    # tests expecting output may need to be adjusted first
-                    # logger.debug(f"[ping-responder] {e!s}")
+                    logger.debug(f"[ping-responder] {e!s}")
                 finally:
                     close_old_connections()
         finally:
