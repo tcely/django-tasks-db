@@ -235,9 +235,10 @@ class Worker:
                 queue_name__in=queues,
             )
         )
-        running_task_keys = {self._task_key(task) for task in running_tasks}
 
-        self._clean_missing_tasks(running_task_keys)
+        self._clean_missing_tasks(
+            set(map(self._task_key, running_tasks)),
+        )
 
         for task in running_tasks:
             worker_ids = set(map(str, task.worker_ids))
