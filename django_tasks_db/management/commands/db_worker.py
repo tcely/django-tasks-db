@@ -486,21 +486,18 @@ class Command(BaseCommand):
     def add_arguments(self, parser: ArgumentParser) -> None:
         parser.add_argument(
             "--queue-name",
-            nargs="?",
             default=DEFAULT_TASK_QUEUE_NAME,
             type=str,
             help="The queues to process. Separate multiple with a comma. To process all queues, use '*' (default: %(default)r)",
         )
         parser.add_argument(
             "--exclude-queues",
-            nargs="?",
             default="",
             type=str,
             help="Queues to exclude. Separate multiple with a comma.",
         )
         parser.add_argument(
             "--interval",
-            nargs="?",
             default=1,
             type=valid_interval,
             help="The interval (in seconds) to wait, when there are no tasks in the queue, before checking for tasks again (default: %(default)r)",
@@ -518,7 +515,6 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--backend",
-            nargs="?",
             default=DEFAULT_TASK_BACKEND_ALIAS,
             type=valid_backend_name,
             dest="backend_name",
@@ -532,14 +528,12 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--max-tasks",
-            nargs="?",
             default=None,
             type=valid_max_tasks,
             help="If provided, the maximum number of tasks the worker will execute before exiting.",
         )
         parser.add_argument(
             "--worker-id",
-            nargs="?",
             type=validate_worker_id,
             help="Worker id. MUST be unique across worker pool (default: auto-generate)",
             default=get_random_string(32),
