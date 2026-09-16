@@ -2,10 +2,10 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [
+    dependencies = (
         ("django_tasks_database", "0021_conditional_partial_index_ordering"),
-    ]
-    operations = [
+    )
+    operations = (
         migrations.CreateModel(
             name="DBTaskPing",
             fields=[
@@ -56,4 +56,4 @@ class Migration(migrations.Migration):
                 ),
             },
         ),
-    ]
+    )
