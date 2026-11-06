@@ -184,9 +184,6 @@ class Worker:
             # Setting the return and success value inside the error handling,
             # So errors setting it (eg JSON encode) can still be recorded
             db_task_result.set_successful(return_value)
-            task_finished.send(
-                sender=backend_type, task_result=db_task_result.task_result
-            )
         except BaseException as e:
             db_task_result.set_failed(e)
 
@@ -200,6 +197,12 @@ class Worker:
                     sender=sender,
                     task_result=task_result,
                 )
+        else:
+            # Sent outside of the error handling, so an exception from a receiver
+            # doesn't mark a task which has already run as failed.
+            task_finished.send(
+                sender=backend_type, task_result=db_task_result.task_result
+            )
         finally:
             self.running_task = False
             self._run_tasks += 1
@@ -243,6 +246,8 @@ class Command(BaseCommand):
     help = "Run a database background worker"
 
     def add_arguments(self, parser: ArgumentParser) -> None:
+        # Distinguish omitted verbosity from an explicit --verbosity=1.
+        parser.set_defaults(verbosity=None)
         parser.add_argument(
             "--queue-name",
             nargs="?",
@@ -304,18 +309,19 @@ class Command(BaseCommand):
             default=get_random_string(32),
         )
 
-    def configure_logging(self, verbosity: int) -> None:
+    def configure_logging(self, verbosity: int | None) -> None:
         tasks_logger = logging.getLogger(TASKS_LOGGER)
 
         if verbosity == 0:
-            tasks_logger.setLevel(logging.CRITICAL)
-            logger.setLevel(logging.CRITICAL)
-        elif verbosity == 1:
-            tasks_logger.setLevel(logging.INFO)
-            logger.setLevel(logging.INFO)
+            log_level = logging.CRITICAL
+        elif verbosity is None or verbosity == 1:
+            log_level = logging.INFO
         else:
-            tasks_logger.setLevel(logging.DEBUG)
-            logger.setLevel(logging.DEBUG)
+            log_level = logging.DEBUG
+
+        for configured_logger in [tasks_logger, logger]:
+            if verbosity is not None or configured_logger.level == logging.NOTSET:
+                configured_logger.setLevel(log_level)
 
         # If no handler is configured, the logs won't show,
         # regardless of the set level.
@@ -328,7 +334,7 @@ class Command(BaseCommand):
     def handle(
         self,
         *,
-        verbosity: int,
+        verbosity: int | None,
         queue_name: str,
         interval: float,
         batch: bool,
