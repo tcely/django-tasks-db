@@ -14,6 +14,7 @@ from contextlib import redirect_stderr
 from datetime import datetime, timedelta
 from functools import partial
 from io import StringIO
+from types import TracebackType
 from typing import Any, cast
 from unittest import mock, skipIf
 
@@ -79,6 +80,89 @@ def skipIfInMemoryDB() -> Any:  # noqa:N802
         "Tests cannot run on in-memory DB",
         "skipIfInMemoryDB",
     )
+
+
+class ManagedWorker:
+    def __init__(self, /, *args: Any, env: dict | None = None, **kwargs: Any) -> None:
+        self._read_fd = None
+        self._write_fd = None
+
+        if not args:
+            raise TypeError("missing 1 required positional argument: 'args'")
+        popen_args = args[0] if isinstance(args[0], (list, tuple)) else args
+        popen_kwargs = {
+            **kwargs,
+            "env": os.environ.copy(),
+        }
+        if env:
+            popen_kwargs["env"].update(env)
+
+        if "posix" == os.name:
+            # POSIX: Setup the s6-style notification pipe
+            self._read_fd, self._write_fd = os.pipe()
+            popen_kwargs["env"]["S6_NOTIFY_FD"] = str(self._write_fd)
+            popen_kwargs["pass_fds"] = (self._write_fd,)
+
+        self.process = subprocess.Popen(args=popen_args, **popen_kwargs)
+        del popen_args, popen_kwargs
+
+        if self._write_fd is not None:
+            os.close(self._write_fd)
+            self._write_fd = None
+
+    def wait_until_ready(self, timeout: float = 6.0) -> bool:
+        if self._read_fd is None:
+            return True
+
+        import select
+
+        start = time.monotonic()
+        while timeout > (time.monotonic() - start):
+            if select.select([self._read_fd], [], [], 0.2)[0]:
+                data = os.read(self._read_fd, 1)
+                if b"" != data:
+                    self.close()
+                    return True
+        else:
+            raise TimeoutError("Worker failed to notify readiness")
+
+        return False
+
+    def close(self) -> None:
+        if self._read_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._read_fd)
+                self._read_fd = None
+
+    def terminate(self) -> None:
+        self.process.terminate()
+        self.process.wait()
+
+    def __enter__(self) -> "ManagedWorker":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        # close first to expose a process that tried a late write
+        self.close()
+        self.terminate()
+
+
+class OrderedLogHandler(logging.Handler):
+    def __init__(self, level: int = logging.DEBUG) -> None:
+        super().__init__(level=level)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+    @property
+    def output(self) -> list[str]:
+        return [self.format(record) for record in self.records]
 
 
 class DatabaseBackendTestCase(TransactionTestCase):
@@ -554,16 +638,120 @@ class DatabaseBackendWorkerTestCase(TransactionTestCase):
         )
     )
 
+    def clear_logger_handlers(self, *loggers: logging.Logger) -> None:
+        for logger in loggers:
+            for handler in tuple(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+
+    def setUp(self) -> None:
+        super().setUp()
+        logger = logging.getLogger("django_tasks_db")
+        tasks_logger = logging.getLogger(LOGGER)
+        self.addCleanup(logger.setLevel, logger.level)
+        self.addCleanup(tasks_logger.setLevel, tasks_logger.level)
+        logger.setLevel(logging.NOTSET)
+        tasks_logger.setLevel(logging.NOTSET)
+
     def tearDown(self) -> None:
         logger = logging.getLogger("django_tasks_db")
         tasks_logger = logging.getLogger(LOGGER)
 
         # Reset the logger after every run, to ensure the correct `stdout` is used
-        for handler in logger.handlers:
-            logger.removeHandler(handler)
+        self.clear_logger_handlers(logger, tasks_logger)
 
-        for handler in tasks_logger.handlers:
-            tasks_logger.removeHandler(handler)
+        super().tearDown()
+
+    def test_default_verbosity_preserves_explicit_logger_levels(self) -> None:
+        logger = logging.getLogger("django_tasks_db")
+        tasks_logger = logging.getLogger(LOGGER)
+        original_logger_level = logger.level
+        original_tasks_logger_level = tasks_logger.level
+        self.addCleanup(logger.setLevel, original_logger_level)
+        self.addCleanup(tasks_logger.setLevel, original_tasks_logger_level)
+
+        logger.setLevel(logging.WARNING)
+        tasks_logger.setLevel(logging.ERROR)
+
+        call_command(
+            "db_worker",
+            batch=True,
+            interval=0,
+            startup_delay=False,
+            worker_id=self.worker_id,
+        )
+
+        self.assertEqual(logger.level, logging.WARNING)
+        self.assertEqual(tasks_logger.level, logging.ERROR)
+
+    def test_default_verbosity_configures_inherited_logger_levels(self) -> None:
+        logger = logging.getLogger("django_tasks_db")
+        tasks_logger = logging.getLogger(LOGGER)
+
+        call_command(
+            "db_worker",
+            batch=True,
+            interval=0,
+            startup_delay=False,
+            stdout=StringIO(),
+            worker_id=self.worker_id,
+        )
+
+        self.assertEqual(logger.level, logging.INFO)
+        self.assertEqual(tasks_logger.level, logging.INFO)
+
+    def test_explicit_verbosity_overrides_configured_logger_levels(self) -> None:
+        logger = logging.getLogger("django_tasks_db")
+        tasks_logger = logging.getLogger(LOGGER)
+        for verbosity, expected_level in (
+            (0, logging.CRITICAL),
+            (1, logging.INFO),
+            (2, logging.DEBUG),
+            (3, logging.DEBUG),
+        ):
+            with self.subTest(verbosity=verbosity):
+                logger.setLevel(logging.WARNING)
+                tasks_logger.setLevel(logging.ERROR)
+                call_command(
+                    "db_worker",
+                    "--verbosity",
+                    str(verbosity),
+                    batch=True,
+                    interval=0,
+                    startup_delay=False,
+                    worker_id=self.worker_id,
+                    stdout=StringIO(),
+                )
+                self.assertEqual(logger.level, expected_level)
+                self.assertEqual(tasks_logger.level, expected_level)
+
+    def test_verbosity_keyword_overrides_configured_logger_levels(self) -> None:
+        logger = logging.getLogger("django_tasks_db")
+        tasks_logger = logging.getLogger(LOGGER)
+        logger.setLevel(logging.WARNING)
+        tasks_logger.setLevel(logging.ERROR)
+
+        self.run_worker(verbosity=1, stdout=StringIO())
+
+        self.assertEqual(logger.level, logging.INFO)
+        self.assertEqual(tasks_logger.level, logging.INFO)
+
+    def test_default_verbosity_preserves_mixed_logger_levels(self) -> None:
+        logger = logging.getLogger("django_tasks_db")
+        tasks_logger = logging.getLogger(LOGGER)
+        logger.setLevel(logging.WARNING)
+
+        call_command(
+            "db_worker",
+            batch=True,
+            interval=0,
+            startup_delay=False,
+            worker_id=self.worker_id,
+            stdout=StringIO(),
+        )
+
+        self.assertEqual(logger.level, logging.WARNING)
+        self.assertEqual(tasks_logger.level, logging.INFO)
 
     def test_run_enqueued_task(self) -> None:
         for task in [
@@ -705,6 +893,29 @@ class DatabaseBackendWorkerTestCase(TransactionTestCase):
         )
 
         self.assertEqual(DBTaskResult.objects.ready().count(), 0)
+
+    def test_task_finished_receiver_error_keeps_result(self) -> None:
+        result = test_tasks.calculate_meaning_of_life.enqueue()
+
+        received = []
+
+        def failing_receiver(sender: Any, task_result: Any, **kwargs: Any) -> None:
+            received.append(task_result.status)
+            raise ConnectionError("Receiver failed")
+
+        compat.task_finished.connect(failing_receiver, weak=False)
+        try:
+            with self.assertRaisesMessage(ConnectionError, "Receiver failed"):
+                self.run_worker()
+        finally:
+            compat.task_finished.disconnect(failing_receiver)
+
+        self.assertEqual(received, [TaskResultStatus.SUCCESSFUL])
+
+        result.refresh()
+        self.assertEqual(result.status, TaskResultStatus.SUCCESSFUL)
+        self.assertEqual(result.return_value, 42)
+        self.assertEqual(result.errors, [])
 
     def test_complex_exception(self) -> None:
         result = test_tasks.complex_exception.enqueue()
@@ -936,18 +1147,58 @@ class DatabaseBackendWorkerTestCase(TransactionTestCase):
     def test_verbose_logging(self) -> None:
         result = test_tasks.noop_task.enqueue()
 
-        stdout = StringIO()
-        self.run_worker(verbosity=3, stdout=stdout, stderr=stdout)
+        self.assertEqual(DBTaskResult.objects.all().count(), 1)
+        self.assertEqual(DBTaskResult.objects.ready().count(), 1)
+        self.assertEqual(DBTaskResult.objects.successful().count(), 0)
+        self.assertEqual(DBTaskResult.objects.failed().count(), 0)
 
-        self.assertEqual(
-            stdout.getvalue().splitlines(),
-            [
-                f"Starting worker worker_id={self.worker_id} queues=default",
-                f"Task id={result.id} path=tests.tasks.noop_task state=RUNNING",
-                f"Task id={result.id} path=tests.tasks.noop_task state=SUCCESSFUL",
-                f"No more tasks to run for worker_id={self.worker_id} - exiting gracefully.",
-            ],
-        )
+        default_log_name = "django_tasks_db"
+        default_logger = logging.getLogger(default_log_name)
+        tasks_logger = logging.getLogger(LOGGER)
+        loggers = (default_logger, tasks_logger)
+
+        formatter = logging.Formatter("%(message)s")
+        lines_handler = OrderedLogHandler()
+        lines_handler.setFormatter(formatter)
+
+        with (
+            self.assertLogs(default_logger, level="DEBUG") as captured_logs,
+            self.assertLogs(tasks_logger, level="DEBUG") as tasks_logs,
+        ):
+            try:
+                for logger in loggers:
+                    logger.addHandler(lines_handler)
+                self.run_worker(verbosity=3)
+            finally:
+                for logger in loggers:
+                    # flush logs
+                    for handler in tuple(logger.handlers):
+                        handler.flush()
+                    logger.removeHandler(lines_handler)
+                lines_handler.close()
+
+        self.assertEqual(DBTaskResult.objects.all().count(), 1)
+        self.assertEqual(DBTaskResult.objects.ready().count(), 0)
+        self.assertEqual(DBTaskResult.objects.successful().count(), 1)
+        self.assertEqual(DBTaskResult.objects.failed().count(), 0)
+
+        expected_lines = [
+            f"Starting worker worker_id={self.worker_id} queues=default",
+            f"Task id={result.id} path=tests.tasks.noop_task state=RUNNING",
+            f"Task id={result.id} path=tests.tasks.noop_task state=SUCCESSFUL",
+            f"No more tasks to run for worker_id={self.worker_id} - exiting gracefully.",
+        ]
+
+        self.assertEqual(lines_handler.output, expected_lines)
+
+        def line_prefix(line: str, *, log_name: str = default_log_name) -> str:
+            if line.startswith("Task id="):
+                log_name = LOGGER
+            return f"INFO:{log_name}:{line}"
+
+        expected_lines.insert(1, expected_lines.pop())
+        expected_lines = [line_prefix(line) for line in expected_lines]
+        self.assertEqual(captured_logs.output + tasks_logs.output, expected_lines)
 
     def test_invalid_task_path(self) -> None:
         db_task_result = DBTaskResult.objects.create(
@@ -1569,7 +1820,7 @@ class DatabaseWorkerProcessTestCase(TransactionTestCase):
         if worker_id is None:
             worker_id = get_random_string(32)
 
-        p = subprocess.Popen(
+        mw = ManagedWorker(
             [
                 sys.executable,
                 "-m",
@@ -1591,8 +1842,10 @@ class DatabaseWorkerProcessTestCase(TransactionTestCase):
             },
             text=True,
         )
-        self.processes.append(p)
-        return p
+        with contextlib.closing(mw):
+            self.processes.append(mw.process)
+            mw.wait_until_ready()
+        return mw.process
 
     def test_run_subprocess(self) -> None:
         result = test_tasks.noop_task.enqueue()
@@ -1608,17 +1861,23 @@ class DatabaseWorkerProcessTestCase(TransactionTestCase):
 
     @skipIf(sys.platform == "win32", "Terminate is always forceful on Windows")
     def test_interrupt_no_tasks(self) -> None:
-        process = self.start_worker()
+        args = [
+            "--interval",
+            str(10 * self.WORKER_STARTUP_TIME),
+        ]
+        process = self.start_worker(args)
 
         time.sleep(self.WORKER_STARTUP_TIME)
 
         process.terminate()
 
-        process.wait(timeout=0.5)
+        process.wait(timeout=(8 * self.WORKER_STARTUP_TIME))
         self.assertEqual(process.returncode, 0)
 
     @skipIf(sys.platform == "win32", "Cannot emulate CTRL-C on Windows")
     def test_interrupt_signals(self) -> None:
+        wait_timeout = 3
+
         for sig in [
             signal.SIGINT,  # ctrl-c
             signal.SIGTERM,
@@ -1628,6 +1887,7 @@ class DatabaseWorkerProcessTestCase(TransactionTestCase):
                 self.assertEqual(DBTaskResult.objects.get(id=result.id).worker_ids, [])
 
                 self.assertGreater(result.args[0], self.WORKER_STARTUP_TIME)
+                self.assertGreater(wait_timeout, result.args[0])
 
                 process = self.start_worker()
 
@@ -1642,7 +1902,7 @@ class DatabaseWorkerProcessTestCase(TransactionTestCase):
 
                 process.send_signal(sig)
 
-                process.wait(timeout=2)
+                process.wait(timeout=wait_timeout)
 
                 self.assertEqual(process.returncode, 0)
 

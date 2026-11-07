@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import math
 import os
@@ -9,7 +10,7 @@ import time
 from argparse import ArgumentParser, ArgumentTypeError, BooleanOptionalAction
 from dataclasses import dataclass
 from types import FrameType
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
@@ -86,6 +87,20 @@ class Worker:
         self._lost_tasks: dict[LostTaskKey, _LostTaskSamples] = {}
 
         self.worker_id = worker_id
+
+        self._notify_fd: int | None = None
+        self.notify_fd()
+
+    def notify_fd(self) -> int | None:
+        if self._notify_fd is None:
+            notify_fd = os.environ.pop("S6_NOTIFY_FD", None)
+            if notify_fd is not None:
+                try:
+                    self._notify_fd = int(notify_fd)
+                except ValueError:
+                    logger.exception("Invalid S6_NOTIFY_FD value: %r", notify_fd)
+
+        return self._notify_fd
 
     def configure_signals(self) -> None:
         signal.signal(signal.SIGINT, self.shutdown)
@@ -361,6 +376,19 @@ class Worker:
             time.sleep(random.random())  # noqa: S311
 
         self._pong_thread.start()
+
+        if self._notify_fd is not None:
+            try:
+                # s6 expects a single newline character to signify the service is ready
+                os.write(self._notify_fd, b"\n")
+            except OSError:
+                # The worker is still functional even if notification fails.
+                logger.exception("Failed to notify s6 on fd: %d", self._notify_fd)
+            finally:
+                with contextlib.suppress(OSError):
+                    os.close(self._notify_fd)
+                self._notify_fd = None
+
         try:
             while self.running and not self._stopping.is_set():
                 # Check for dropped/expired connections right after waking up
@@ -377,7 +405,7 @@ class Worker:
                         "No more tasks to run for worker_id=%s - exiting gracefully.",
                         self.worker_id,
                     )
-                    return None
+                    return
 
                 if self.max_tasks is not None and self._run_tasks >= self.max_tasks:
                     logger.info(
@@ -385,7 +413,7 @@ class Worker:
                         self._run_tasks,
                         self.worker_id,
                     )
-                    return None
+                    return
 
                 self._limbo_tasks(queues=queues)
 
@@ -427,9 +455,6 @@ class Worker:
             # Setting the return and success value inside the error handling,
             # So errors setting it (eg JSON encode) can still be recorded
             db_task_result.set_successful(return_value)
-            task_finished.send(
-                sender=backend_type, task_result=db_task_result.task_result
-            )
         except BaseException as e:
             db_task_result.set_failed(e)
 
@@ -443,10 +468,51 @@ class Worker:
                     sender=sender,
                     task_result=task_result,
                 )
+        else:
+            # Sent outside of the error handling, so an exception from a receiver
+            # doesn't mark a task which has already run as failed.
+            task_finished.send(
+                sender=backend_type, task_result=db_task_result.task_result
+            )
         finally:
             with self._running_task_lock:
                 self.running_task = None
             self._run_tasks += 1
+
+
+def _relay_fd_notification(worker: Worker) -> None:
+    """
+    In the reloader parent, relay the child's readiness newline to s6.
+
+    The parent never calls Worker.run(), so the child writes to a pipe instead
+    and this thread forwards the newline to the original s6 fd.
+    """
+    s6_fd = worker.notify_fd()
+    if s6_fd is None:
+        return
+
+    read_fd, write_fd = os.pipe()
+    os.set_inheritable(write_fd, True)
+    os.set_inheritable(s6_fd, False)
+    os.environ["S6_NOTIFY_FD"] = str(write_fd)
+
+    def relay() -> None:
+        try:
+            data = os.read(read_fd, 1)
+            if b"" != data:
+                os.write(s6_fd, b"\n")
+        except OSError:
+            logger.exception("Failed to relay s6 notification on fd: %s", s6_fd)
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(s6_fd)
+            with contextlib.suppress(OSError):
+                os.close(read_fd)
+            with contextlib.suppress(OSError):
+                os.close(write_fd)
+            os.environ.pop("S6_NOTIFY_FD", None)
+
+    threading.Thread(target=relay, daemon=True).start()
 
 
 def valid_backend_name(val: str) -> str:
@@ -487,6 +553,8 @@ class Command(BaseCommand):
     help = "Run a database background worker"
 
     def add_arguments(self, parser: ArgumentParser) -> None:
+        # Distinguish omitted verbosity from an explicit --verbosity=1.
+        parser.set_defaults(verbosity=None)
         parser.add_argument(
             "--queue-name",
             nargs="?",
@@ -548,18 +616,19 @@ class Command(BaseCommand):
             default=get_random_string(32),
         )
 
-    def configure_logging(self, verbosity: int) -> None:
+    def configure_logging(self, verbosity: int | None) -> None:
         tasks_logger = logging.getLogger(TASKS_LOGGER)
 
         if verbosity == 0:
-            tasks_logger.setLevel(logging.CRITICAL)
-            logger.setLevel(logging.CRITICAL)
-        elif verbosity == 1:
-            tasks_logger.setLevel(logging.INFO)
-            logger.setLevel(logging.INFO)
+            log_level = logging.CRITICAL
+        elif verbosity is None or verbosity == 1:
+            log_level = logging.INFO
         else:
-            tasks_logger.setLevel(logging.DEBUG)
-            logger.setLevel(logging.DEBUG)
+            log_level = logging.DEBUG
+
+        for configured_logger in [tasks_logger, logger]:
+            if verbosity is not None or configured_logger.level == logging.NOTSET:
+                configured_logger.setLevel(log_level)
 
         # If no handler is configured, the logs won't show,
         # regardless of the set level.
@@ -572,7 +641,7 @@ class Command(BaseCommand):
     def handle(
         self,
         *,
-        verbosity: int,
+        verbosity: int | None,
         queue_name: str,
         interval: float,
         batch: bool,
@@ -582,7 +651,7 @@ class Command(BaseCommand):
         max_tasks: int | None,
         worker_id: str,
         exclude_queues: str,
-        **options: dict,
+        **options: Any,
     ) -> None:
         self.configure_logging(verbosity)
 
@@ -613,6 +682,9 @@ class Command(BaseCommand):
             if os.environ.get(DJANGO_AUTORELOAD_ENV) == "true":
                 # Only the child process should configure its signals
                 worker.configure_signals()
+
+            else:
+                _relay_fd_notification(worker)
 
             run_with_reloader(worker.run)
         else:
