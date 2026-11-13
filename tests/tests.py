@@ -605,6 +605,7 @@ class DatabaseBackendWorkerTestCase(TransactionTestCase):
             batch=True,
             interval=0,
             startup_delay=False,
+            stdout=StringIO(),
             worker_id=self.worker_id,
         )
 
