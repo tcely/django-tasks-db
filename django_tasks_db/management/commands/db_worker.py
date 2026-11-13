@@ -7,6 +7,7 @@ import sys
 import time
 from argparse import ArgumentParser, ArgumentTypeError, BooleanOptionalAction
 from types import FrameType
+from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
@@ -344,7 +345,7 @@ class Command(BaseCommand):
         max_tasks: int | None,
         worker_id: str,
         exclude_queues: str,
-        **options: dict,
+        **options: Any,
     ) -> None:
         self.configure_logging(verbosity)
 
