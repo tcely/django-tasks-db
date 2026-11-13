@@ -140,7 +140,7 @@ class Worker:
                     "No more tasks to run for worker_id=%s - exiting gracefully.",
                     self.worker_id,
                 )
-                return None
+                return
 
             if self.max_tasks is not None and self._run_tasks >= self.max_tasks:
                 logger.info(
@@ -148,7 +148,7 @@ class Worker:
                     self._run_tasks,
                     self.worker_id,
                 )
-                return None
+                return
 
             # Emulate Django's request behaviour and check for expired
             # database connections periodically.
